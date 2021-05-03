@@ -203,6 +203,40 @@ function CC._typeinf(interp::JETInterpreter, frame::InferenceState)
     return ret
 end
 
+
+function CC.typeinf_local(interp::JETInterpreter, frame::InferenceState)
+    ret = @invoke CC.typeinf_local(interp::AbstractInterpreter, frame::InferenceState)
+    stmts = frame.src.code
+
+    iter_types = Dict{Int64, Vector{CC.VarState}}()  # a map from variable ids to their possible types
+    for (stmt, typ) in zip(stmts, frame.stmt_types)
+        if isa(stmt, Expr) && length(stmt.args) >= 2
+            sym = stmt.args[2]
+            if (isa(sym, Expr) && !isempty(sym.args) &&
+                isa(sym.args[1], GlobalRef) && sym.args[1].name === :iterate)
+                iter_var = sym.args[2].id  # e.g. the `_1` in `_1 = Base.iterate(%1, %8)`
+                types = filter(t -> isa(t, VarState), typ)
+                @info(iter_var)
+                if !haskey(iter_types, iter_var)
+                    iter_types[iter_var] = types
+                else
+                    append!(iter_types[iter_var], types)
+                end
+            elseif isa(sym, Core.SlotNumber) && haskey(iter_types, sym.id)
+                append!(iter_types[sym.id], typ)
+            end
+        end
+    end
+    for (var, types) in pairs(iter_types)
+        if (!isempty(types) &&
+            !any(t -> typeintersect(t.typ, Union{Nothing, Tuple{Any, Any}}) !== Bottom, types))
+            report!(interp, InfiniteIterationErrorReport(interp, frame))
+        end
+    end
+
+    return ret
+end
+
 """
     is_from_same_frame(parent_linfo::MethodInstance, current_linfo::MethodInstance) ->
         (report::InferenceErrorReport) -> Bool
