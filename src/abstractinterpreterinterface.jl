@@ -248,9 +248,6 @@ mutable struct JETInterpreter <: AbstractInterpreter
     # stashes `UncaughtExceptionReport`s that are not caught so far
     uncaught_exceptions::Vector{UncaughtExceptionReport}
 
-    # keeps reports that should be updated when returning back the parent frame (i.e. the next time we get back to inter-procedural context)
-    to_be_updated::Set{InferenceErrorReport}
-
     # keeps track of the current inference frame (needed for report cache reconstruction)
     current_frame::Union{Nothing,InferenceState}
 
@@ -321,7 +318,6 @@ end
                           cache_key,
                           InferenceErrorReport[],
                           UncaughtExceptionReport[],
-                          Set{InferenceErrorReport}(),
                           current_frame,
                           cache,
                           analysis_params,
@@ -432,13 +428,15 @@ JETAnalysisParams(interp::JETInterpreter) = interp.analysis_params
 JETLogger(interp::JETInterpreter) = interp.logger
 
 # TODO do report filtering or something configured by `JETAnalysisParams(interp)`
-function report!(interp::JETInterpreter, report::InferenceErrorReport)
-    push!(interp.reports, report)
-end
+report!(frame::InferenceState, report::InferenceErrorReport) =
+    report!(frame.result, report)
+report!(result::InferenceResult, report::InferenceErrorReport) =
+    push!((result.metadata::FrameReports).reports, report)
 
-function stash_uncaught_exception!(interp::JETInterpreter, report::UncaughtExceptionReport)
-    push!(interp.uncaught_exceptions, report)
-end
+stash_uncaught_exception!(frame::InferenceState, report::UncaughtExceptionReport) =
+    stash_uncaught_exception!(frame.result, report)
+stash_uncaught_exception!(result::InferenceResult, report::UncaughtExceptionReport) =
+    push!((frame.metadata::FrameReports).uncaught_exceptions, report)
 
 # check if we're in a toplevel module
 @inline istoplevel(interp::JETInterpreter, sv::InferenceState)    = istoplevel(interp, sv.linfo)

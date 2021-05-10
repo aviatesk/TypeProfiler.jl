@@ -16,7 +16,7 @@ function CC.builtin_tfunction(interp::JETInterpreter, @nospecialize(f), argtypes
             if isa(a, Const)
                 v = a.val
                 if isa(v, UndefKeywordError)
-                    report!(interp, UndefKeywordErrorReport(interp, sv, v, get_lin(sv)))
+                    report!(sv, UndefKeywordErrorReport(interp, sv, v, get_lin(sv)))
                 end
             end
         end
@@ -40,13 +40,13 @@ function CC.builtin_tfunction(interp::JETInterpreter, @nospecialize(f), argtypes
                             # TODO; `ret` should be `Any` here, add report pass here (for performance linting)
                         else
                             # report access to undefined global variable
-                            report!(interp, GlobalUndefVarErrorReport(interp, sv, mod, name))
+                            report!(sv, GlobalUndefVarErrorReport(interp, sv, mod, name))
                             # return Bottom
                         end
                     elseif ret === Bottom
                         # general case when an error is detected by the native `getfield_tfunc`
                         typ = widenconst(obj)
-                        report!(interp, NoFieldErrorReport(interp, sv, typ, name))
+                        report!(sv, NoFieldErrorReport(interp, sv, typ, name))
                         return ret
                     end
                 end
@@ -75,7 +75,7 @@ function CC.builtin_tfunction(interp::JETInterpreter, @nospecialize(f), argtypes
         t = widenconst(a)
         if t <: Base.BitSigned64 || t <: Base.BitUnsigned64
             if isa(a, Const) && a.val === zero(t)
-                report!(interp, DivideErrorReport(interp, sv))
+                report!(sv, DivideErrorReport(interp, sv))
                 return Bottom
             end
         end
@@ -85,7 +85,7 @@ function CC.builtin_tfunction(interp::JETInterpreter, @nospecialize(f), argtypes
         # XXX: for general case, JET just relies on the (maybe too persmissive) return type
         # from native tfuncs to report invalid builtin calls and probably there're lots of
         # false negatives
-        report!(interp, InvalidBuiltinCallErrorReport(interp, sv, argtypes))
+        report!(sv, InvalidBuiltinCallErrorReport(interp, sv, argtypes))
     end
 
     return ret
@@ -108,11 +108,11 @@ end
 function CC.return_type_tfunc(interp::JETInterpreter, argtypes::Vector{Any}, sv::InferenceState)
     if length(argtypes) ≠ 3
         # invalid argument number, let's report and return error result (i.e. `Bottom`)
-        report!(interp, NoMethodErrorReport(interp,
-                                            sv,
-                                            # this is not necessary to be computed correctly, though
-                                            argtypes_to_type(argtypes),
-                                            ))
+        report!(sv, NoMethodErrorReport(interp,
+                                        sv,
+                                        # this is not necessary to be computed correctly, though
+                                        argtypes_to_type(argtypes),
+                                        ))
         @static if isdefined(CC, :ReturnTypeCallInfo)
             return CallMeta(Bottom, nothing)
         else

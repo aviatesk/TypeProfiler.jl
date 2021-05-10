@@ -26,6 +26,7 @@ function CC.typeinf(interp::JETInterpreter, frame::InferenceState)
 
     prev_frame = interp.current_frame
     interp.current_frame = frame
+    frame.result.metadata = FrameReports()
 
     ret = @invoke typeinf(interp::AbstractInterpreter, frame::InferenceState)
 
@@ -67,7 +68,6 @@ function CC._typeinf(interp::JETInterpreter, frame::InferenceState)
     parent = frame.parent
     isentry = parent === nothing
     iscp = is_constant_propagated(frame)
-    reports = interp.reports
 
     # some methods like `getproperty` can't propagate accurate types without actual values,
     # and constant prop' plays a somewhat critical role in those cases by overwriteing the
@@ -79,10 +79,7 @@ function CC._typeinf(interp::JETInterpreter, frame::InferenceState)
     # NOTE `frame.linfo` is the exactly same object as that of the previous non-constant inference
     # IDEA we may still want to keep some "serious" error reports like `GlobalUndefVarErrorReport`
     # even when constant prop' reveals it never happens given the current constant arguments
-    iscp && !isentry && filter!(!is_from_same_frame(parent.linfo, linfo), reports)
-
-    reports_before             = Set(reports)
-    uncaught_exceptions_before = Set(interp.uncaught_exceptions)
+    iscp && !isentry && filter!(!is_from_same_frame(parent.linfo, linfo), report_store(parent))
 
     ret = @invoke _typeinf(interp::AbstractInterpreter, frame::InferenceState)
 
@@ -103,7 +100,7 @@ function CC._typeinf(interp::JETInterpreter, frame::InferenceState)
                 # the optimization so far has found this statement is never "reachable";
                 # JET reports it since it will invoke undef var error at runtime, or will just
                 # be dead code otherwise
-                report!(interp, LocalUndefVarErrorReport(interp, frame, sym, idx))
+                report!(frame, LocalUndefVarErrorReport(interp, frame, sym, idx))
             # else
                 # by excluding this pass, JET accepts some false negatives (i.e. don't report
                 # those that may actually happen on actual execution)
@@ -111,88 +108,76 @@ function CC._typeinf(interp::JETInterpreter, frame::InferenceState)
         end
     end
 
-    # XXX this is a dirty fix for performance problem, we need more "proper" fix
-    # https://github.com/aviatesk/JET.jl/issues/75
-    unique!(report_identity_key, reports)
+    # isentry || unique!(report_identity_key, report_store(parent))
 
-    reports_after = Set(reports)
+    # # XXX this is a dirty fix for performance problem, we need more "proper" fix
+    # # https://github.com/aviatesk/JET.jl/issues/75
+    # unique!(report_identity_key, reports)
 
-    # report `throw` calls "appropriately"
-    if get_result(frame) === Bottom
-        # if the return type here is `Bottom` annotated, this _may_ mean there're uncaught
-        # `throw` calls
-        # XXX: well, it's possible that the `throw` calls within them are all caught but the
-        # other critical errors make the return type `Bottom`
-        # NOTE: to reduce the false positive `UncaughtExceptionReport`s described above, we count
-        # `throw` calls here after optimization, since it may have eliminated "unreachable"
-        # `throw` calls
-        codelocs    = frame.src.codelocs
-        linetable   = frame.src.linetable::Vector
-        throw_locs  = LineInfoNode[]
-        throw_calls = Expr[]
-        for r in reports
-            if isa(r, ExceptionReport) && last(r.vst).linfo === linfo
-                push!(throw_locs, r.lin)
-            end
-        end
-        for (i, stmt) in enumerate(stmts)
-            is_throw_call_expr(interp, frame, stmt) || continue
-            # if this `throw` is already reported, don't duplciate
-            linetable[codelocs[i]]::LineInfoNode in throw_locs && continue
-            push!(throw_calls, stmt)
-        end
-        if !isempty(throw_calls)
-            stash_uncaught_exception!(interp, UncaughtExceptionReport(interp, frame, throw_calls))
-        end
+    # # report `throw` calls "appropriately"
+    # if get_result(frame) === Bottom
+    #     # if the return type here is `Bottom` annotated, this _may_ mean there're uncaught
+    #     # `throw` calls
+    #     # XXX: well, it's possible that the `throw` calls within them are all caught but the
+    #     # other critical errors make the return type `Bottom`
+    #     # NOTE: to reduce the false positive `UncaughtExceptionReport`s described above, we count
+    #     # `throw` calls here after optimization, since it may have eliminated "unreachable"
+    #     # `throw` calls
+    #     codelocs    = frame.src.codelocs
+    #     linetable   = frame.src.linetable::Vector
+    #     throw_locs  = LineInfoNode[]
+    #     throw_calls = Expr[]
+    #     for r in reports
+    #         if isa(r, ExceptionReport) && last(r.vst).linfo === linfo
+    #             push!(throw_locs, r.lin)
+    #         end
+    #     end
+    #     for (i, stmt) in enumerate(stmts)
+    #         is_throw_call_expr(interp, frame, stmt) || continue
+    #         # if this `throw` is already reported, don't duplciate
+    #         linetable[codelocs[i]]::LineInfoNode in throw_locs && continue
+    #         push!(throw_calls, stmt)
+    #     end
+    #     if !isempty(throw_calls)
+    #         stash_uncaught_exception!(frame, UncaughtExceptionReport(interp, frame, throw_calls))
+    #     end
+    # else
+    #     # the non-`Bottom` result here may mean `throw` calls from the children frames
+    #     # (if exists) are caught and not propagated here;
+    #     # we don't want to cache `UncaughtExceptionReport`s for those calls for this frame
+    #     # and its parents, so just filter them away
+    #     empty!(interp.uncaught_exceptions)
+    # end
+
+    # if !isempty(this_caches)
+    #     if iscp
+    #         result = frame.result
+    #         argtypes = result.argtypes
+    #         cache = interp.cache
+    #         @static JET_DEV_MODE && @assert jet_cache_lookup(linfo, argtypes, cache) === nothing "invalid local caching $linfo, $argtypes"
+    #         local_cache = InferenceErrorReportCache[]
+    #         for report in this_caches
+    #             # # TODO make this hold
+    #             # @assert first(report.vst).linfo === linfo "invalid local caching"
+    #             cache_report!(local_cache, report)
+    #         end
+    #         # branching on https://github.com/JuliaLang/julia/pull/39972
+    #         given_argtypes, overridden_by_const = @static if VERSION ≥ v"1.7.0-DEV.705"
+    #             def = result.linfo.def
+    #             va_overwride = isa(def, Method) && def.is_for_opaque_closure
+    #             matching_cache_argtypes(linfo, argtypes, va_overwride)
+    #         else
+    #             matching_cache_argtypes(linfo, argtypes)
+    #         end
+    #         push!(cache, AnalysisResult(linfo, given_argtypes, overridden_by_const, local_cache))
+    #     end
+    # end
+
+    if isentry
+        append!(interp.reports, report_store(frame))
     else
-        # the non-`Bottom` result here may mean `throw` calls from the children frames
-        # (if exists) are caught and not propagated here;
-        # we don't want to cache `UncaughtExceptionReport`s for those calls for this frame
-        # and its parents, so just filter them away
-        empty!(interp.uncaught_exceptions)
+        append!(update_store(parent), report_store(frame))
     end
-
-    uncaught_exceptions_after = Set(interp.uncaught_exceptions)
-
-    # compute JET analysis results that should be cached for this linfo
-    this_caches = union!(setdiff!(reports_after, reports_before),
-                         setdiff!(uncaught_exceptions_after, uncaught_exceptions_before))
-
-    if !isempty(this_caches)
-        if iscp
-            result = frame.result
-            argtypes = result.argtypes
-            cache = interp.cache
-            @static JET_DEV_MODE && @assert jet_cache_lookup(linfo, argtypes, cache) === nothing "invalid local caching $linfo, $argtypes"
-            local_cache = InferenceErrorReportCache[]
-            for report in this_caches
-                # # TODO make this hold
-                # @assert first(report.vst).linfo === linfo "invalid local caching"
-                cache_report!(local_cache, report)
-            end
-            # branching on https://github.com/JuliaLang/julia/pull/39972
-            given_argtypes, overridden_by_const = @static if VERSION ≥ v"1.7.0-DEV.705"
-                def = result.linfo.def
-                va_overwride = isa(def, Method) && def.is_for_opaque_closure
-                matching_cache_argtypes(linfo, argtypes, va_overwride)
-            else
-                matching_cache_argtypes(linfo, argtypes)
-            end
-            push!(cache, AnalysisResult(linfo, given_argtypes, overridden_by_const, local_cache))
-        elseif frame.cached # only cache when `NativeInterpreter` does
-            cache = jet_report_cache(interp)
-            @static JET_DEV_MODE && @assert !haskey(cache, linfo) || isentry "invalid global caching $linfo"
-            global_cache = InferenceErrorReportCache[]
-            for report in this_caches
-                # # TODO make this hold
-                # @assert first(report.vst).linfo === linfo "invalid global caching"
-                cache_report!(global_cache, report)
-            end
-            cache[linfo] = global_cache
-        end
-    end
-
-    interp.to_be_updated = this_caches
 
     if !iscp && !isentry
         # refinement for this `linfo` may change analysis result for parent frame
@@ -202,6 +187,17 @@ function CC._typeinf(interp::JETInterpreter, frame::InferenceState)
 
     return ret
 end
+
+struct FrameReports
+    reports::Vector{InferenceErrorReport}
+    updates::Vector{InferenceErrorReport}
+end
+FrameReports() = FrameReports(InferenceErrorReport[], InferenceErrorReport[])
+
+report_store(x::Union{InferenceState,InferenceResult}) = metadata(x).reports
+update_store(x::Union{InferenceState,InferenceResult}) = metadata(x).updates
+metadata(frame::InferenceState)                        = metadata(frame.result)
+metadata(result::InferenceResult)                      = result.metadata::FrameReports
 
 """
     is_from_same_frame(parent_linfo::MethodInstance, current_linfo::MethodInstance) ->
