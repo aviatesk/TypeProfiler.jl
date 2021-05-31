@@ -129,10 +129,6 @@ function abstract_call_gf_by_type(interp::$JETInterpreter, @nospecialize(f), arg
         end
     end
 
-    #=== abstract_call_gf_by_type patch point 4-1 start ===#
-    nreports = length(interp.reports)
-    #=== abstract_call_gf_by_type patch point 4-1 end ===#
-
     for i in 1:napplicable
         match = applicable[i]::MethodMatch
         method = match.method
@@ -184,17 +180,11 @@ function abstract_call_gf_by_type(interp::$JETInterpreter, @nospecialize(f), arg
         #=== abstract_call_gf_by_type patch point 3-2 end ===#
     end
 
-    #=== abstract_call_gf_by_type patch point 4-2 start ===#
-    # check if constant propagation can improve analysis by throwing away possibly false positive reports
-    has_been_reported = (length(interp.reports) - nreports) > 0
-    #=== abstract_call_gf_by_type patch point 4-2 end ===#
-
     # try constant propagation if only 1 method is inferred to non-Bottom
     # this is in preparation for inlining, or improving the return result
     is_unused = call_result_unused(sv)
     #=== abstract_call_gf_by_type patch point 4-3 start ===#
-    if nonbot > 0 && seen == napplicable && (!edgecycle || !is_unused) &&
-            (is_improvable(rettype) || has_been_reported) && InferenceParams(interp).ipo_constant_propagation
+    if nonbot > 0 && seen == napplicable # && (!edgecycle || !is_unused) && is_improvable(rettype) && InferenceParams(interp).ipo_constant_propagation
     #=== abstract_call_gf_by_type patch point 4-3 end ===#
         # if there's a possibility we could constant-propagate a better result
         # (hopefully without doing too much work), try to do that now

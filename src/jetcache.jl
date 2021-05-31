@@ -90,8 +90,9 @@ function invalidate_jet_cache!(replaced, max_world, depth = 0)
     if isdefined(replaced, :backedges)
         for mi in replaced.backedges
             mi = mi::MethodInstance
-            if !any(cache->haskey(cache, mi), values(JET_REPORT_CACHE)) && !any(cache->haskey(cache, mi), values(JET_CODE_CACHE))
-                continue # otherwise infinite loop)
+            if !(any(cache->haskey(cache, mi), values(JET_REPORT_CACHE)) ||
+                 any(cache->haskey(cache, mi), values(JET_CODE_CACHE)))
+                continue # otherwise fall into infinite loop
             end
             invalidate_jet_cache!(mi, max_world, depth+1)
         end

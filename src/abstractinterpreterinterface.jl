@@ -260,13 +260,6 @@ mutable struct JETInterpreter <: AbstractInterpreter
     # configurations for JET analysis
     analysis_params::JETAnalysisParams
 
-    # tracks there has been any error reported in `abstract_call_method`
-    # that information will help JET decide it's worth to do constant prop' even if
-    # `NativeInterpreter` doesn't find it useful (i.e. the return type can't be improved anymore)
-    # NOTE this field is supposed to be computed at each call of `abstract_call_method`, and
-    # then immediately reset within the next `abstract_call_method_with_const_args` call
-    anyerror::Bool
-
     ## virtual toplevel execution ##
 
     # will be used in toplevel analysis (skip inference on actually interpreted statements)
@@ -325,7 +318,6 @@ end
                           current_frame,
                           cache,
                           analysis_params,
-                          false,
                           concretized,
                           toplevelmod,
                           toplevelmods,

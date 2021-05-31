@@ -908,3 +908,16 @@ end
         @test isa(r, GeneratorErrorReport) && r.err == "invalid argument"
     end
 end
+
+@testset "aggressive constant prop' entry" begin
+    # the first inference on `foo(::Int)` knows the return type is `Const(nothing)`,
+    # but we want to re-enter `foo(::Const(0))` and get `UncaughtExceptionReport`
+    interp, frame = @eval Module() begin
+        function foo(a)
+            a == 0 ? throw("report me") : nothing
+        end
+        $analyze_call() do; foo(0); end
+    end
+    @test get_result(frame) === CC.Bottom # not `Const(nothing)`, as opposed to `NativeInterpreter`
+    @test any(r->isa(r,UncaughtExceptionReport), interp.reports)
+end

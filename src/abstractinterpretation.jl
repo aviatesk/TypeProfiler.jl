@@ -172,17 +172,16 @@ end
 @doc """
     const_prop_entry_heuristic(interp::JETInterpreter, @nospecialize(rettype), sv::InferenceState, edgecycle::Bool)
 
-An overload for `abstract_call_method_with_const_args(interp::JETInterpreter, ...)`, which
-  forces constant prop' even if the inference result can't be improved anymore, e.g. when
-  `rettype` is already `Const`; this is because constant prop' can still produce more accurate
-  analysis by throwing away false positive error reports by cutting off the unreachable
-  control flow.
+This overload for `abstract_call_method_with_const_args(interp::JETInterpreter, ...)` forces
+  constant prop' even if the inference result can't be improved anymore _in terms of type inference_,
+  e.g. when `rettype` is already `Const`.
+The reason we want much more aggressive constant propagation here is that if it can't improve
+  the return type, it can still produce more accurate analysis for JET, by throwing away
+  false positive error reports by cutting off the unreachable control flow or detecting
+  must-reachable `throw` calls, at the cost of analysis performance.
 """
 function CC.const_prop_entry_heuristic(interp::JETInterpreter, @nospecialize(rettype), sv::InferenceState, edgecycle::Bool)
-    anyerror = interp.anyerror
-    interp.anyerror = false # reset immediately, this `anyerror` is only valid for this match
-    CC.call_result_unused(sv) && edgecycle && return false
-    return InferenceParams(interp).ipo_constant_propagation && (anyerror || CC.is_improvable(rettype))
+    return true # always entry constant prop'
 end
 
 else # @static if IS_LATEST_CALL_INTERFACE
@@ -261,19 +260,7 @@ end
 
 # works within inter-procedural context
 function CC.abstract_call_method(interp::JETInterpreter, method::Method, @nospecialize(sig), sparams::SimpleVector, hardlimit::Bool, sv::InferenceState)
-    @static IS_LATEST_CALL_INTERFACE && @assert !interp.anyerror
-
-    @static IS_LATEST_CALL_INTERFACE && (nreports = length(interp.reports))
-
     ret = @invoke abstract_call_method(interp::AbstractInterpreter, method::Method, sig, sparams::SimpleVector, hardlimit::Bool, sv::InferenceState)
-
-    @static if IS_LATEST_CALL_INTERFACE
-        # make sure that `interp.anyreport` is modified only when there is succeeding
-        # immediate call of `abstract_call_method_with_const_args`
-        if !method.is_for_opaque_closure || !ret[2] # edgecycle
-            interp.anyerror = (length(interp.reports) - nreports) > 0
-        end
-    end
 
     update_reports!(interp, sv)
 
