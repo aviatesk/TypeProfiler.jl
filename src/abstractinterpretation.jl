@@ -434,6 +434,120 @@ function CC.abstract_eval_statement(interp::JETInterpreter, @nospecialize(e), vt
     return @invoke abstract_eval_statement(interp::AbstractInterpreter, e, vtypes::VarTable, sv::InferenceState)
 end
 
+# TODO generalize the following check to "this function will never return"
+
+# in this overload we will work on pre-optimization state
+function CC.typeinf_local(interp::JETInterpreter, frame::InferenceState)
+    @invoke typeinf_local(interp::AbstractInterpreter, frame::InferenceState)
+    maybe_report_infinite_iterations!(interp, frame)
+end
+
+function maybe_report_infinite_iterations!(interp::JETInterpreter, frame::InferenceState)
+    src = frame.src
+    infos = maybe_find_iter_infos(src)
+    if !isnothing(infos)
+        ssavaluetypes = src.ssavaluetypes::Vector{Any}
+        @inbounds for (dest, call2cond) in infos
+            local may_terminate = false
+            for (_, cond) in call2cond
+                condt = ssavaluetypes[cond]
+                t = widenconditional(condt)
+                if !(isa(t, Const) && t.val === true)
+                    may_terminate = true
+                    break
+                end
+            end
+            may_terminate && continue
+
+            @assert ssavaluetypes[dest] === NOT_FOUND # abstract interpretaion should never reach the destination
+            t = nothing
+            pc = nothing
+            for (call, _) in call2cond
+                ea = ((src.code[call]::Expr).args[2]::Expr).args # x_ = iterate(t′, [state])
+                t′ = @invoke abstract_eval_value(interp::AbstractInterpreter, ea[2]::Any, frame.stmt_types[call]::VarTable, frame::InferenceState)
+                @assert isnothing(t) || t === t′
+                t = t′
+
+                if isnothing(pc)
+                    pc = call
+                end
+            end
+            report!(interp, InfiniteIterationErrorReport(interp, frame, t, pc))
+        end
+    end
+end
+
+function maybe_find_iter_infos(src::CodeInfo)
+    bbs = compute_basic_blocks(src.code) # XXX basic block construction can be time-consuming
+
+    stmts = nothing
+
+    for bb in bbs.blocks
+        maybeinfo = maybe_find_iteration_info_for_block(src, bb)
+        if !isnothing(maybeinfo)
+            cond, (call, dest) = maybeinfo
+            if isnothing(stmts)
+                stmts = Dict{Int,Vector{Tuple{Int,Int}}}()
+            end
+            push!(@get!(stmts, dest, Tuple{Int,Int}[]), (call, cond))
+        end
+    end
+
+    return stmts
+end
+
+# if this basic block comes from the iteration protocol, return the tuple of
+# (stmt # of iteration termination check, tuple of (stmt # of `iterate` call, stmt # of the destination))
+function maybe_find_iteration_info_for_block(src::CodeInfo, bb::BasicBlock)
+    # check for there is a sequence pattern of `iterate` call -> `nothing` check -> `Base.not_int` -> `goto #target if not`
+    stmts = bb.stmts
+    length(stmts) ≥ 4 || return nothing
+
+    @inbounds begin
+    region = src.code[stmts][end-3:end]
+
+    terminator = region[end]
+    isa(terminator, GotoIfNot) || return nothing
+
+    preds = region[end-3:end-1]
+    is_iterate_stmt(preds[1]) || return nothing
+    is_nothing_check_stmt(preds[2]) || return nothing
+    is_notint_stmt(preds[3]) || return nothing
+
+    return stmts[end-1], (stmts[end-3], terminator.dest)
+    end
+end
+
+function is_iterate_stmt(@nospecialize(x))
+    @isexpr(x, :(=)) || return false
+    lhs = x.args[2]
+    return @isexpr(lhs, :call) && is_global_ref(lhs.args[1], Base, :iterate)
+end
+
+function is_nothing_check_stmt(@nospecialize(x))
+    @isexpr(x, :call) || return false
+    length(x.args) ≥ 3 || return false
+    is_global_ref(x.args[1], Core, :(===)) || return false
+    return x.args[3] === nothing
+end
+
+function is_notint_stmt(@nospecialize(x))
+    @isexpr(x, :call) || return false
+    return is_global_ref(x.args[1], Base, :not_int)
+end
+
+is_global_ref(@nospecialize(x), mod::Module, name::Symbol) = isa(x, GlobalRef) && x.mod === mod && x.name === name
+
+# TODO more detailed error report using the context of abstract iteration
+function CC.abstract_iteration(interp::JETInterpreter, @nospecialize(itft), @nospecialize(itertype), sv::InferenceState)
+    ret = @invoke abstract_iteration(interp::AbstractInterpreter, @nospecialize(itft), @nospecialize(itertype), sv::InferenceState)
+    rts, info = ret
+    if length(rts) == 1 && first(rts) === Bottom && isnothing(info)
+        report!(interp, InfiniteIterationErrorReport(interp, sv, itertype))
+    end
+    return ret
+end
+
 function CC.finish(me::InferenceState, interp::JETInterpreter)
     @invoke finish(me::InferenceState, interp::AbstractInterpreter)
 

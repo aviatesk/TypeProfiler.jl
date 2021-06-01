@@ -908,3 +908,82 @@ end
         @test isa(r, GeneratorErrorReport) && r.err == "invalid argument"
     end
 end
+
+@testset "infinite iteration" begin
+    m = @fixturedef begin
+        struct NeverTerminate
+            val::Int
+        end
+        Base.iterate(nv::NeverTerminate, state = 0) =
+            state>nv.val ? (state, state+1) : (state, state+1)
+    end
+
+    let # iteration protocol
+        interp, frame = @eval m $analyze_call((Int,)) do n
+            for a in NeverTerminate(n)
+                println(a)
+            end
+        end
+        @test any(interp.reports) do r
+            isa(r, InfiniteIterationErrorReport) &&
+            r.typ === m.NeverTerminate &&
+            any(r.vst) do vf
+                vf.line == (@__LINE__)-8
+            end
+        end
+    end
+
+    let # iteration protocol, nested
+        interp, frame = @eval m $analyze_call((Int,)) do n
+            for a in 1:n
+                for b in NeverTerminate(a)
+                    println(b)
+                end
+            end
+        end
+        @test any(interp.reports) do r
+            isa(r, InfiniteIterationErrorReport) &&
+            r.typ === m.NeverTerminate &&
+            any(r.vst) do vf
+                vf.line == (@__LINE__)-9
+            end
+        end
+    end
+
+    let # iteration protocol, on container type
+        interp, frame = @eval m $analyze_call((Int,)) do n
+            sum((a for a in NeverTerminate(n))...)
+        end
+        @test any(interp.reports) do r
+            isa(r, InfiniteIterationErrorReport)
+        end
+    end
+
+    let # complicated control flow, no false positive
+        interp, frame = analyze_call((Char,Tuple{Char,Char})) do x, itr
+            # adapated from https://github.com/JuliaLang/julia/blob/24d9eab45632bdb3120c9e664503745eb58aa2d6/base/operators.jl#L1278-L1297
+            anymissing = false
+            for y in itr
+                v = (y == x)
+                if ismissing(v)
+                    anymissing = true
+                elseif v
+                    return true
+                end
+            end
+            return anymissing ? missing : false
+        end
+        @test isempty(interp.reports)
+    end
+
+    let # general case of "this function never return"
+        # NOTE comes down to `Base._foldl_impl`
+        interp, frame = @eval m $analyze_call((Int,)) do n
+            sum(a for a in NeverTerminate(n))
+        end
+        @test_broken any(interp.reports) do r
+            isa(r, InfiniteIterationErrorReport) &&
+            r.typ === m.NeverTerminate
+        end
+    end
+end

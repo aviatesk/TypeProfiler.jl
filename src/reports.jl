@@ -512,6 +512,17 @@ let s = sprint(showerror, DivideError())
     global get_msg(::Type{DivideErrorReport}, interp, sv::InferenceState) = s
 end
 
+@reportdef struct InfiniteIterationErrorReport <: InferenceErrorReport
+    @nospecialize(typ)
+end
+# if provided, use program counter where infinite iteration(s) is found
+function InfiniteIterationErrorReport(interp, sv::InferenceState, @nospecialize(typ), pc = nothing)
+    vst = VirtualFrame[get_virtual_frame(interp, sv, isnothing(pc) ? get_currpc(sv) : pc)]
+    msg = "iterate(::$typ) won't terminate"
+    sig = get_sig(interp, sv, isnothing(pc) ? get_stmt(sv) : get_stmt(sv, pc))
+    return InfiniteIterationErrorReport(vst, msg, sig, typ)
+end
+
 # TODO we may want to hoist `InvalidConstXXX` errors into top-level errors
 
 @reportdef struct InvalidConstantRedefinition <: InferenceErrorReport

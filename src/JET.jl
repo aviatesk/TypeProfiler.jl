@@ -47,6 +47,8 @@ import .CC:
     abstract_eval_special_value,
     abstract_eval_value,
     abstract_eval_statement,
+    typeinf_local,
+    abstract_iteration,
     # typeinfer.jl
     typeinf,
     _typeinf,
@@ -108,6 +110,7 @@ import .CC:
     BasicBlock,
     slot_id,
     widenconst,
+    widenconditional,
     ⊑,
     is_throw_call,
     tmerge,
@@ -431,6 +434,13 @@ macro jetconfigurable(funcdef)
     return esc(funcdef)
 end
 const _JET_CONFIGURATIONS = Dict{Symbol,Symbol}()
+
+macro get!(x, key, default)
+    return quote
+        x, key = $(esc(x)), $(esc(key))
+        haskey(x, key) ? x[key] : (x[key] = $(esc(default)))
+    end
+end
 
 # utils
 # -----
